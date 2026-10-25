@@ -1,17 +1,17 @@
-
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
   runApp(const DeliveryIraqApp());
 }
 
-class AppColors {
-  static const background = Color(0xFF101010);
-  static const surface = Color(0xFF1B1B1B);
-  static const gold = Color(0xFFFFC928);
-  static const muted = Color(0xFFAAAAAA);
-  static const white = Colors.white;
-}
+const Color gold = Color(0xFFFFC928);
+const Color dark = Color(0xFF101010);
+const Color panel = Color(0xFF1D1D1D);
 
 class DeliveryIraqApp extends StatelessWidget {
   const DeliveryIraqApp({super.key});
@@ -23,385 +23,513 @@ class DeliveryIraqApp extends StatelessWidget {
       title: 'دلفري العراق',
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: AppColors.background,
-        colorScheme: const ColorScheme.dark(
-          primary: AppColors.gold,
-          surface: AppColors.surface,
+        scaffoldBackgroundColor: dark,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: gold,
+          brightness: Brightness.dark,
         ),
-        useMaterial3: true,
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: panel,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: Colors.white12),
+          ),
+        ),
       ),
-      home: const Directionality(
-        textDirection: TextDirection.rtl,
-        child: HomePage(),
+      home: const AuthGate(),
+    );
+  }
+}
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const LoadingPage();
+        }
+
+        if (snapshot.data == null) {
+          return const LoginPage();
+        }
+
+        return ProfilePage(user: snapshot.data!);
+      },
+    );
+  }
+}
+
+class LoadingPage extends StatelessWidget {
+  const LoadingPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(
+        child: CircularProgressIndicator(color: gold),
       ),
     );
   }
 }
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<LoginPage> createState() => _LoginPageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  int selectedIndex = 0;
+class _LoginPageState extends State<LoginPage> {
+  final formKey = GlobalKey<FormState>();
 
-  final List<String> categories = [
-    'مطاعم',
-    'مواد غذائية',
-    'صيدليات',
-    'مشتريات',
-    'توصيل أغراض',
-    'طلبات خاصة',
-  ];
+  final name = TextEditingController();
+  final phone = TextEditingController();
+  final governorate = TextEditingController();
+  final area = TextEditingController();
+  final email = TextEditingController();
+  final password = TextEditingController();
 
-  final List<IconData> categoryIcons = [
-    Icons.restaurant_rounded,
-    Icons.shopping_basket_rounded,
-    Icons.local_pharmacy_rounded,
-    Icons.shopping_bag_rounded,
-    Icons.delivery_dining_rounded,
-    Icons.inventory_2_rounded,
-  ];
+  String role = 'customer';
+  bool isRegister = false;
+  bool loading = false;
+
+  @override
+  void dispose() {
+    name.dispose();
+    phone.dispose();
+    governorate.dispose();
+    area.dispose();
+    email.dispose();
+    password.dispose();
+    super.dispose();
+  }
+
+  Future<void> submit() async {
+    if (!formKey.currentState!.validate()) return;
+
+    setState(() => loading = true);
+
+    try {
+      if (isRegister) {
+        final result = await FirebaseAuth.instance
+            .createUserWithEmailAndPassword(
+          email: email.text.trim(),
+          password: password.text.trim(),
+        );
+
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(result.user!.uid)
+            .set({
+          'name': name.text.trim(),
+          'phone': phone.text.trim(),
+          'governorate': governorate.text.trim(),
+          'area': area.text.trim(),
+          'email': email.text.trim(),
+          'role': role,
+          'createdAt': FieldValue.serverTimestamp(),
+          'active': true,
+        });
+      } else {
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: email.text.trim(),
+          password: password.text.trim(),
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      String message = 'حدث خطأ، حاول مرة ثانية';
+
+      if (e.code == 'email-already-in-use') {
+        message = 'هذا البريد مسجل سابقاً';
+      } else if (e.code == 'weak-password') {
+        message = 'كلمة المرور ضعيفة، استخدم 6 أحرف أو أكثر';
+      } else if (e.code == 'user-not-found' ||
+          e.code == 'wrong-password' ||
+          e.code == 'invalid-credential') {
+        message = 'البريد أو كلمة المرور غير صحيحة';
+      } else if (e.code == 'invalid-email') {
+        message = 'البريد الإلكتروني غير صحيح';
+      } else if (e.code == 'network-request-failed') {
+        message = 'تأكد من اتصال الإنترنت';
+      }
+
+      showMessage(message);
+    } catch (e) {
+      showMessage('تعذر إكمال العملية. تأكد من إعداد Firebase وقواعد البيانات.');
+    }
+
+    if (mounted) {
+      setState(() => loading = false);
+    }
+  }
+
+  void showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  Widget field(
+    String label,
+    TextEditingController controller, {
+    bool secret = false,
+    TextInputType keyboard = TextInputType.text,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 13),
+      child: TextFormField(
+        controller: controller,
+        obscureText: secret,
+        keyboardType: keyboard,
+        textDirection: TextDirection.rtl,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: const Icon(Icons.edit, color: gold),
+        ),
+        validator: (value) {
+          if (value == null || value.trim().isEmpty) {
+            return 'هذا الحقل مطلوب';
+          }
+
+          if (controller == phone && value.trim().length < 10) {
+            return 'أدخل رقم هاتف صحيح';
+          }
+
+          if (controller == password && value.trim().length < 6) {
+            return 'كلمة المرور 6 أحرف على الأقل';
+          }
+
+          if (controller == email && !value.contains('@')) {
+            return 'أدخل بريد إلكتروني صحيح';
+          }
+
+          return null;
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(22),
+            child: Form(
+              key: formKey,
+              child: Column(
+                children: [
+                  const Icon(
+                    Icons.delivery_dining,
+                    color: gold,
+                    size: 85,
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'دلفري العراق',
+                    style: TextStyle(
+                      fontSize: 30,
+                      fontWeight: FontWeight.bold,
+                      color: gold,
+                    ),
+                  ),
+                  const SizedBox(height: 7),
+                  const Text(
+                    'طلبك يوصل لباب بيتك',
+                    style: TextStyle(color: Colors.white60),
+                  ),
+                  const SizedBox(height: 30),
+
+                  Text(
+                    isRegister ? 'إنشاء حساب جديد' : 'تسجيل الدخول',
+                    style: const TextStyle(
+                      fontSize: 23,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+
+                  if (isRegister) ...[
+                    field('الاسم الكامل', name),
+                    field(
+                      'رقم الهاتف',
+                      phone,
+                      keyboard: TextInputType.phone,
+                    ),
+                    field('المحافظة', governorate),
+                    field('المنطقة أو القضاء', area),
+
+                    const Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        'نوع الحساب',
+                        style: TextStyle(color: gold, fontSize: 16),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    Row(
+                      children: [
+                        Expanded(
+                          child: roleButton(
+                            'زبون',
+                            'customer',
+                            Icons.person,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: roleButton(
+                            'مندوب',
+                            'courier',
+                            Icons.delivery_dining,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 15),
+                  ],
+
+                  field(
+                    'البريد الإلكتروني',
+                    email,
+                    keyboard: TextInputType.emailAddress,
+                  ),
+                  field('كلمة المرور', password, secret: true),
+
+                  const SizedBox(height: 12),
+
+                  SizedBox(
+                    width: double.infinity,
+                    height: 53,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: gold,
+                        foregroundColor: Colors.black,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      onPressed: loading ? null : submit,
+                      child: loading
+                          ? const CircularProgressIndicator(
+                              color: Colors.black,
+                            )
+                          : Text(
+                              isRegister ? 'إنشاء الحساب' : 'دخول',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                    ),
+                  ),
+
+                  TextButton(
+                    onPressed: loading
+                        ? null
+                        : () {
+                            setState(() {
+                              isRegister = !isRegister;
+                            });
+                          },
+                    child: Text(
+                      isRegister
+                          ? 'عندي حساب، تسجيل الدخول'
+                          : 'ما عندي حساب، إنشاء حساب جديد',
+                      style: const TextStyle(color: gold),
+                    ),
+                  ),
+
+                  const SizedBox(height: 30),
+                  const Text(
+                    'تطوير وبرمجة: علاوي ال حمادي',
+                    style: TextStyle(color: Colors.white54),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'للشكاوى والتواصل عبر واتساب',
+                    style: TextStyle(color: Colors.white54),
+                  ),
+                  TextButton.icon(
+                    onPressed: () {
+                      showMessage(
+                        'زر واتساب سيتم ربطه في مرحلة التواصل',
+                      );
+                    },
+                    icon: const Icon(Icons.chat, color: gold),
+                    label: const Text(
+                      '07880254887',
+                      style: TextStyle(color: gold),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget roleButton(String title, String value, IconData icon) {
+    final selected = role == value;
+
+    return InkWell(
+      onTap: () => setState(() => role = value),
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
+          color: selected ? gold.withOpacity(0.15) : panel,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: selected ? gold : Colors.white12,
+            width: 1.5,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              color: selected ? gold : Colors.white70,
+              size: 30,
+            ),
+            const SizedBox(height: 7),
+            Text(
+              title,
+              style: TextStyle(
+                color: selected ? gold : Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ProfilePage extends StatelessWidget {
+  final User user;
+
+  const ProfilePage({super.key, required this.user});
+
+  Future<void> logout() async {
+    await FirebaseAuth.instance.signOut();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: AppColors.background,
-        title: Row(
-          children: [
-            const Icon(
-              Icons.delivery_dining_rounded,
-              color: AppColors.gold,
-              size: 32,
-            ),
-            const SizedBox(width: 8),
-            const Text(
-              'دلفري العراق',
-              style: TextStyle(
-                color: AppColors.gold,
-                fontWeight: FontWeight.bold,
-                fontSize: 21,
-              ),
-            ),
-          ],
+        title: const Text(
+          'دلفري العراق',
+          style: TextStyle(color: gold, fontWeight: FontWeight.bold),
         ),
         actions: [
           IconButton(
-            onPressed: () => showMessage('الإشعارات ستتوفر بعد ربط النظام'),
-            icon: const Icon(Icons.notifications_none_rounded),
+            onPressed: logout,
+            icon: const Icon(Icons.logout),
+            tooltip: 'تسجيل الخروج',
           ),
         ],
       ),
-      body: IndexedStack(
-        index: selectedIndex,
-        children: [
-          _buildHome(),
-          _buildOrders(),
-          _buildAccount(),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        backgroundColor: AppColors.surface,
-        indicatorColor: AppColors.gold.withOpacity(0.18),
-        selectedIndex: selectedIndex,
-        onDestinationSelected: (index) {
-          setState(() => selectedIndex = index);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home, color: AppColors.gold),
-            label: 'الرئيسية',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.receipt_long_outlined),
-            selectedIcon: Icon(Icons.receipt_long, color: AppColors.gold),
-            label: 'طلباتي',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person, color: AppColors.gold),
-            label: 'حسابي',
-          ),
-        ],
-      ),
-    );
-  }
+      body: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const LoadingPage();
+          }
 
-  Widget _buildHome() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [
-                  Color(0xFF3A2C08),
-                  Color(0xFF1D1A12),
+          if (!snapshot.hasData || !snapshot.data!.exists) {
+            return const Center(
+              child: Text('لم يتم العثور على بيانات الحساب'),
+            );
+          }
+
+          final data =
+              snapshot.data!.data() as Map<String, dynamic>;
+
+          final isCourier = data['role'] == 'courier';
+
+          return Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(22),
+              child: Column(
+                children: [
+                  Icon(
+                    isCourier
+                        ? Icons.delivery_dining
+                        : Icons.person,
+                    color: gold,
+                    size: 90,
+                  ),
+                  const SizedBox(height: 15),
+                  Text(
+                    isCourier ? 'واجهة المندوب' : 'واجهة الزبون',
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.bold,
+                      color: gold,
+                    ),
+                  ),
+                  const SizedBox(height: 25),
+                  infoTile('الاسم', data['name']),
+                  infoTile('رقم الهاتف', data['phone']),
+                  infoTile('المحافظة', data['governorate']),
+                  infoTile('المنطقة', data['area']),
+                  infoTile('البريد الإلكتروني', data['email']),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'تطوير وبرمجة علاوي ال حمادي',
+                    style: TextStyle(color: Colors.white54),
+                  ),
                 ],
               ),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: AppColors.gold.withOpacity(0.5)),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'أهلاً بيك بالعراق',
-                  style: TextStyle(
-                    fontSize: 23,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.white,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'كل طلباتك وتوصيلاتك بمكان واحد',
-                  style: TextStyle(color: AppColors.muted),
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () => showMessage(
-                      'راح نضيف إنشاء الطلب وربطه بالمندوبين بالمرحلة القادمة',
-                    ),
-                    icon: const Icon(Icons.add_location_alt_outlined),
-                    label: const Text('اطلب توصيل الآن'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.gold,
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 25),
-          const Text(
-            'شنو تحتاج اليوم؟',
-            style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 14),
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: categories.length,
-            gridDelegate:
-                const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 0.95,
-            ),
-            itemBuilder: (context, index) {
-              return InkWell(
-                borderRadius: BorderRadius.circular(16),
-                onTap: () => showMessage(
-                  'قسم ${categories[index]} راح نفعّله بالمرحلة القادمة',
-                ),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        categoryIcons[index],
-                        color: AppColors.gold,
-                        size: 32,
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        categories[index],
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: AppColors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 25),
-          const Text(
-            'خدمات دلفري العراق',
-            style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 12),
-          _serviceCard(
-            Icons.delivery_dining,
-            'مندوب توصيل',
-            'اختيار مندوب من منطقتك وتوصيل طلبك',
-          ),
-          _serviceCard(
-            Icons.location_on_outlined,
-            'تغطية المحافظات',
-            'نظام مخصص للمحافظة والمنطقة',
-          ),
-          _serviceCard(
-            Icons.track_changes,
-            'متابعة الطلب',
-            'متابعة حالة طلبك خطوة بخطوة',
-          ),
-          const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.info_outline, color: AppColors.gold),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'هذه واجهة البداية. الطلبات والمندوبون الحقيقيون يحتاجون ربط قاعدة البيانات.',
-                    style: TextStyle(
-                      color: AppColors.muted,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
 
-  Widget _serviceCard(IconData icon, String title, String subtitle) {
+  Widget infoTile(String title, dynamic value) {
     return Container(
+      width: double.infinity,
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(15),
       decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white10),
+        color: panel,
+        borderRadius: BorderRadius.circular(13),
       ),
       child: Row(
         children: [
-          Icon(icon, color: AppColors.gold, size: 29),
-          const SizedBox(width: 13),
+          Text(
+            '$title: ',
+            style: const TextStyle(color: gold),
+          ),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: const TextStyle(
-                    color: AppColors.muted,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
+            child: Text(
+              value?.toString() ?? '',
+              textAlign: TextAlign.end,
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildOrders() {
-    return const Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.receipt_long, size: 65, color: AppColors.gold),
-          SizedBox(height: 15),
-          Text(
-            'طلباتي',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-          ),
-          SizedBox(height: 8),
-          Text(
-            'طلباتك راح تظهر هنا بعد ربط النظام',
-            style: TextStyle(color: AppColors.muted),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAccount() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const CircleAvatar(
-              radius: 42,
-              backgroundColor: AppColors.surface,
-              child: Icon(
-                Icons.person,
-                size: 48,
-                color: AppColors.gold,
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'حساب المستخدم',
-              style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'سجّل حسابك حتى تستخدم خدمات دلفري العراق',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.muted),
-            ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: () => showMessage(
-                  'راح نبني تسجيل العملاء والمندوبين بالخطوة القادمة',
-                ),
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.gold,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.all(14),
-                ),
-                child: const Text('تسجيل حساب جديد'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppColors.surface,
       ),
     );
   }
